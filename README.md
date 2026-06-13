@@ -10,7 +10,7 @@
 
 **A next-generation, enterprise-grade translation platform powered by Google Translate API, Gemini AI, and Firebase — deployed on Google Cloud Run.**
 
-[🚀 Live App](https://auratranslator-codelabs-1-491815.us-central1.run.app) • [📖 API Docs](docs/API.md) • [🏗 Architecture](docs/ARCHITECTURE.md) • [🚢 Deployment](docs/DEPLOYMENT.md)
+[🚀 Live App](https://auratranslator-694414640481.us-central1.run.app) • [📖 API Docs](docs/API.md) • [🏗 Architecture](docs/ARCHITECTURE.md) • [🚢 Deployment](docs/DEPLOYMENT.md)
 
 </div>
 
@@ -156,17 +156,29 @@ npm run dev
 
 ### Google Cloud Run (Production)
 
-```bash
-# 1. Run the infrastructure setup (first time only)
-bash infrastructure/setup.sh
+To deploy AuraTranslator automatically on Google Cloud Run via GitHub Actions, follow these steps:
 
-# 2. Add GitHub secrets (shown at end of setup.sh output)
-# GCP_WORKLOAD_IDENTITY_PROVIDER
-# GCP_SERVICE_ACCOUNT
+1. **Run the infrastructure setup script (first time only):**
+   ```bash
+   bash infrastructure/setup.sh
+   ```
 
-# 3. Push to main branch — CI/CD deploys automatically
-git push origin main
-```
+2. **Add Workload Identity Federation (WIF) secrets to your GitHub repository** (Settings → Secrets and variables → Actions → Repository Secrets):
+   * **`GCP_SERVICE_ACCOUNT`**: `auratranslator-sa@codelabs-1-491815.iam.gserviceaccount.com`
+   * **`GCP_WORKLOAD_IDENTITY_PROVIDER`**: `projects/694414640481/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider`
+
+3. **Populate secrets in GCP Secret Manager:**
+   The application uses GCP Secret Manager to securely manage environment variables. Since initial placeholder values are created during setup, you **MUST** go to the Google Cloud Console and populate these secrets with real credentials:
+   * `GOOGLE_TRANSLATE_API_KEY`: Your Google Cloud Translation API key.
+   * `GEMINI_API_KEY`: Your Google Gemini API key.
+   * `NEXTAUTH_SECRET`: A secure random string for signing JWT tokens.
+   * `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: Credentials for Google OAuth login.
+
+4. **Push to the repository:**
+   The deployment workflow will run automatically on push.
+   ```bash
+   git push origin master
+   ```
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed instructions.
 
