@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3000:8080'
+    environment:
+      - ML_SERVICE_URL=http://ml-service:8090
+      - NODE_ENV=production
+    depends_on:
+      ml-service:
+        condition: service_healthy
+    networks:
+      - auratranslator
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    ports:
+      - '8090:8090'
+    environment:
+      - MODEL_CACHE_DIR=/models/cache
+      - NLLB_MODEL=facebook/nllb-200-distilled-600M
+      - INDICTRANS_EN_INDIC=ai4bharat/indictrans2-en-indic-1B
+      - INDICTRANS_INDIC_EN=ai4bharat/indictrans2-indic-en-1B
+    volumes:
+      - model-cache:/models/cache
+      - domain-models:/models/domain
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    networks:
+      - auratranslator
+
+  ml-service-gpu:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile.gpu
+    profiles:
+      - gpu
+    ports:
+      - '8091:8090'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - MODEL_CACHE_DIR=/models/cache
+    volumes:
+      - model-cache:/models/cache
+      - domain-models:/models/domain
+    networks:
+      - auratranslator
+
+volumes:
+  model-cache:
+  domain-models:
+
+networks:
+  auratranslator:
+    driver: bridge

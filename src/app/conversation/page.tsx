@@ -22,6 +22,7 @@ import Link from 'next/link';
 import { LANGUAGES, getLanguageName, getLanguageByCode } from '@/utils/languages';
 import ThemeToggle from '@/components/ThemeToggle';
 import { trackEvent } from '@/utils/analytics';
+import { WavRecorder } from '@/utils/audio-recorder';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -129,9 +130,10 @@ function LangPicker({ value, onChange, side, disabled }: LangPickerProps) {
 interface BubbleProps {
   msg: ConversationMessage;
   onSpeak: (msg: ConversationMessage) => void;
+  isSpeaking?: boolean;
 }
 
-function MessageBubble({ msg, onSpeak }: BubbleProps) {
+function MessageBubble({ msg, onSpeak, isSpeaking }: BubbleProps) {
   const isA = msg.speaker === 'A';
 
   const time = msg.timestamp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -178,10 +180,14 @@ function MessageBubble({ msg, onSpeak }: BubbleProps) {
           {!msg.isTranslating && msg.translatedText && (
             <button
               onClick={() => onSpeak(msg)}
-              className={`p-1 rounded-full transition-colors ${isA ? 'hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-400 hover:text-blue-600' : 'hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-400 hover:text-emerald-600'}`}
+              className={`p-1 rounded-full transition-colors ${isA ? 'hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-400 hover:text-blue-600' : 'hover:bg-emerald-50 dark:hover:bg-emerald-900/20 text-emerald-400 hover:text-emerald-600'} ${isSpeaking ? 'animate-pulse text-violet-600 dark:text-violet-400' : ''}`}
               title="Speak translation aloud"
             >
-              <Volume2 className="w-3.5 h-3.5" />
+              {isSpeaking ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5" />
+              )}
             </button>
           )}
         </div>
@@ -201,10 +207,12 @@ export default function ConversationPage() {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
 
   // Speech recognition
-  const [isSpeechSupported, setIsSpeechSupported] = useState(false);
+  const [isSpeechSupported, setIsSpeechSupported] = useState(true);
   const [activeSpeaker, setActiveSpeaker] = useState<Speaker | null>(null);
   const [interimTranscript, setInterimTranscript] = useState('');
   const recognitionRef = useRef<any>(null);
+  const wavRecorderRef = useRef<WavRecorder | null>(null);
+  const [isSpeakingMap, setIsSpeakingMap] = useState<Record<string, boolean>>({});
 
   // Manual input
   const [inputA, setInputA] = useState('');
@@ -219,8 +227,8 @@ export default function ConversationPage() {
   // ── Init speech recognition ────────────────────────────────────────────────
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      setIsSpeechSupported(!!SR);
+      const hasMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      setIsSpeechSupported(hasMedia);
     }
   }, []);
 
@@ -248,13 +256,19 @@ export default function ConversationPage() {
       isTranslating: true,
     };
 
+    const historyContext = messages.slice(-5).map((m) => m.originalText);
     setMessages((prev) => [...prev, msg]);
 
     try {
       const res = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: originalText.trim(), sourceLang, targetLang }),
+        body: JSON.stringify({
+          text: originalText.trim(),
+          sourceLang,
+          targetLang,
+          contextHistory: historyContext,
+        }),
       });
       const data = await res.json();
       const translated = data.translatedText ?? originalText;
@@ -278,68 +292,101 @@ export default function ConversationPage() {
         prev.map((m) => (m.id === id ? { ...m, translatedText: '[Translation failed]', isTranslating: false } : m)),
       );
     }
-  }, [langA, langB, isAutoSpeak]);
+  }, [langA, langB, isAutoSpeak, messages]);
 
-  // ── Speech-to-Text control ─────────────────────────────────────────────────
-  const startListening = useCallback((speaker: Speaker) => {
-    if (!isSpeechSupported) return;
-
-    // Stop any current session
-    if (recognitionRef.current) {
-      recognitionRef.current.abort();
-      recognitionRef.current = null;
-    }
+  // ── Speech-to-Speech control using SeamlessM4T ──────────────────────────────
+  const startListening = useCallback(async (speaker: Speaker) => {
     window.speechSynthesis?.cancel();
 
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const rec = new SR();
-    rec.lang = speaker === 'A' ? langA : langB;
-    rec.continuous = false;
-    rec.interimResults = true;
-
-    rec.onstart = () => {
+    try {
+      if (!wavRecorderRef.current) {
+        wavRecorderRef.current = new WavRecorder();
+      }
+      await wavRecorderRef.current.start();
       setActiveSpeaker(speaker);
-      setInterimTranscript('');
-    };
-
-    rec.onresult = (e: any) => {
-      let interim = '';
-      let final = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) final += t;
-        else interim += t;
-      }
-      setInterimTranscript(interim || final);
-      if (final) {
-        setInterimTranscript('');
-        addMessage(speaker, final);
-      }
-    };
-
-    rec.onerror = (e: any) => {
-      if (e.error !== 'no-speech' && e.error !== 'aborted') {
-        console.error('STT error:', e.error);
-      }
-      setActiveSpeaker(null);
-      setInterimTranscript('');
-    };
-
-    rec.onend = () => {
-      setActiveSpeaker(null);
-      setInterimTranscript('');
-      recognitionRef.current = null;
-    };
-
-    recognitionRef.current = rec;
-    rec.start();
-  }, [isSpeechSupported, langA, langB, addMessage]);
-
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      setInterimTranscript('Recording...');
+    } catch (err) {
+      console.error('Failed to start recording:', err);
+      alert('Microphone access is required for live speech translation.');
     }
   }, []);
+
+  const stopListening = useCallback(async () => {
+    if (!wavRecorderRef.current || !activeSpeaker) return;
+    
+    const speaker = activeSpeaker;
+    setActiveSpeaker(null);
+    setInterimTranscript('');
+
+    try {
+      const audioBlob = wavRecorderRef.current.stop();
+      
+      const sourceLang = speaker === 'A' ? langA : langB;
+      const targetLang = speaker === 'A' ? langB : langA;
+
+      const id = Math.random().toString(36).slice(2, 11);
+      const placeholderMsg: ConversationMessage = {
+        id,
+        speaker,
+        originalText: '🎤 Speech Input',
+        translatedText: '',
+        sourceLang,
+        targetLang,
+        timestamp: new Date(),
+        isTranslating: true,
+      };
+      
+      setMessages((prev) => [...prev, placeholderMsg]);
+
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'audio.wav');
+      formData.append('sourceLang', sourceLang);
+      formData.append('targetLang', targetLang);
+      formData.append('task', 'speech_to_speech');
+
+      const res = await fetch('/api/translate-speech', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        throw new Error('Speech translation request failed');
+      }
+
+      const rawText = res.headers.get('X-Translated-Text') || '';
+      const translatedText = decodeURIComponent(rawText);
+      const resAudioBlob = await res.blob();
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === id
+            ? {
+                ...m,
+                translatedText: translatedText || '[Speech translated]',
+                isTranslating: false,
+              }
+            : m
+        )
+      );
+
+      if (isAutoSpeak) {
+        const audioUrl = URL.createObjectURL(resAudioBlob);
+        const audio = new Audio(audioUrl);
+        audio.play().catch((e) => console.error('Audio playback failed:', e));
+      }
+
+      trackEvent('voice_translation', sourceLang, targetLang);
+    } catch (err) {
+      console.error('Speech translation failed:', err);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.isTranslating
+            ? { ...m, translatedText: '[Speech translation failed]', isTranslating: false }
+            : m
+        )
+      );
+    }
+  }, [activeSpeaker, langA, langB, isAutoSpeak]);
 
   const handleMicClick = (speaker: Speaker) => {
     if (activeSpeaker === speaker) {
@@ -349,13 +396,48 @@ export default function ConversationPage() {
     }
   };
 
-  // ── Speak translated message ───────────────────────────────────────────────
-  const handleSpeak = (msg: ConversationMessage) => {
-    if (!msg.translatedText || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(msg.translatedText);
-    utter.lang = msg.targetLang;
-    window.speechSynthesis.speak(utter);
+  // ── Speak translated message using SeamlessM4T TTS ──────────────────────────
+  const handleSpeak = async (msg: ConversationMessage) => {
+    if (!msg.translatedText) return;
+    
+    setIsSpeakingMap(prev => ({ ...prev, [msg.id]: true }));
+    
+    try {
+      const res = await fetch('/api/text-to-speech', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: msg.translatedText,
+          sourceLang: msg.sourceLang,
+          targetLang: msg.targetLang,
+        }),
+      });
+
+      if (!res.ok) throw new Error('TTS failed');
+
+      const audioBlob = await res.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audio.onended = () => {
+        setIsSpeakingMap(prev => ({ ...prev, [msg.id]: false }));
+      };
+      
+      await audio.play();
+    } catch (err) {
+      console.error('Neural TTS failed, falling back to browser synthesis:', err);
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(msg.translatedText);
+        utter.lang = msg.targetLang;
+        utter.onend = () => {
+          setIsSpeakingMap(prev => ({ ...prev, [msg.id]: false }));
+        };
+        window.speechSynthesis.speak(utter);
+      } else {
+        setIsSpeakingMap(prev => ({ ...prev, [msg.id]: false }));
+      }
+    }
   };
 
   // ── Manual send ───────────────────────────────────────────────────────────
@@ -512,7 +594,7 @@ export default function ConversationPage() {
 
           {/* Messages */}
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} onSpeak={handleSpeak} />
+            <MessageBubble key={msg.id} msg={msg} onSpeak={handleSpeak} isSpeaking={isSpeakingMap[msg.id]} />
           ))}
 
           {/* Interim live transcript */}

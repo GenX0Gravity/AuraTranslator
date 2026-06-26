@@ -8,9 +8,9 @@
 ![Cloud Run](https://img.shields.io/badge/Google_Cloud_Run-deployed-4285F4?style=for-the-badge&logo=googlecloud)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?style=for-the-badge&logo=typescript)
 
-**A next-generation, enterprise-grade translation platform powered by Google Translate API, Gemini AI, and Firebase — deployed on Google Cloud Run.**
+**A next-generation hybrid AI translation platform — open-source models (NLLB, IndicTrans2, MarianMT), continuous learning, and minimal API dependency — deployed on Google Cloud Run.**
 
-[🚀 Live App](https://auratranslator-694414640481.us-central1.run.app) • [📖 API Docs](docs/API.md) • [🏗 Architecture](docs/ARCHITECTURE.md) • [🚢 Deployment](docs/DEPLOYMENT.md)
+[🚀 Live App](https://auratranslator-694414640481.us-central1.run.app) • [📖 Architecture](docs/ARCHITECTURE.md) • [🚢 Deployment](docs/DEPLOYMENT.md)
 
 </div>
 
@@ -20,7 +20,13 @@
 
 | Feature | Status |
 |---------|--------|
-| 🤖 AI Text Translation (Google Translate + Gemini fallback) | ✅ |
+| 🤖 Hybrid Translation (NLLB, IndicTrans2, MarianMT, M2M100, OPUS-MT) | ✅ |
+| 🇮🇳 Indian Language Specialization (12 languages via IndicTrans2) | ✅ |
+| 🧭 Intelligent Model Router with confidence scoring | ✅ |
+| 📚 Domain-Specific Translation (Medical, Legal, Education, etc.) | ✅ |
+| 🔄 Continuous Learning from user feedback & corrections | ✅ |
+| 📊 Model Benchmarking (BLEU, latency) | ✅ |
+| 💾 Translation Memory + Offline IndexedDB cache | ✅ |
 | 🔍 Automatic Language Detection | ✅ |
 | 🎙️ Speech-to-Text (Web Speech API) | ✅ |
 | 🔊 Text-to-Speech with voice/rate/gender control | ✅ |

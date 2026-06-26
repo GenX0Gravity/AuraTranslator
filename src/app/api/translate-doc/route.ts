@@ -1,4 +1,5 @@
 import { createRequire } from 'module';
+import Tesseract from 'tesseract.js';
 
 // Polyfill browser globals expected by pdf-parse (via pdfjs-dist) in Node.js
 if (typeof globalThis !== 'undefined') {
@@ -253,6 +254,122 @@ async function handlePdf(
   return resultBuffer;
 }
 
+async function handlePptx(
+  buffer: Buffer,
+  sourceLang: string,
+  targetLang: string,
+  baseUrl: string,
+  send: (data: object) => void,
+): Promise<Buffer> {
+  const AdmZip = require('adm-zip');
+  const zip = new AdmZip(buffer);
+  const zipEntries = zip.getEntries();
+  const slideEntries = zipEntries.filter((entry: any) =>
+    entry.entryName.startsWith('ppt/slides/slide') && entry.entryName.endsWith('.xml')
+  );
+
+  send({ percent: 10, status: `Found ${slideEntries.length} slides. Parsing structure...` });
+
+  const paragraphRegex = /<a:p[ >][\s\S]*?<\/a:p>/g;
+
+  for (let sIdx = 0; sIdx < slideEntries.length; sIdx++) {
+    const entry = slideEntries[sIdx];
+    const xmlStr = entry.getData().toString('utf-8');
+
+    const paragraphMatches: string[] = [];
+    const paragraphTexts: string[] = [];
+
+    let match;
+    while ((match = paragraphRegex.exec(xmlStr)) !== null) {
+      const pXml = match[0];
+      const texts: string[] = [];
+      let tMatch;
+      const tRegex = /<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g;
+      while ((tMatch = tRegex.exec(pXml)) !== null) {
+        texts.push(tMatch[1]);
+      }
+      paragraphMatches.push(pXml);
+      paragraphTexts.push(texts.join(''));
+    }
+
+    send({
+      percent: 10 + Math.round((sIdx / slideEntries.length) * 80),
+      status: `Translating slide ${sIdx + 1} of ${slideEntries.length}...`
+    });
+
+    const translatedTexts: string[] = new Array(paragraphTexts.length).fill('');
+    for (let i = 0; i < paragraphTexts.length; i++) {
+      const text = paragraphTexts[i].trim();
+      if (text) {
+        translatedTexts[i] = await translateChunk(text, sourceLang, targetLang, baseUrl);
+      }
+    }
+
+    let updatedXml = xmlStr;
+    for (let i = paragraphMatches.length - 1; i >= 0; i--) {
+      const original = paragraphMatches[i];
+      const translated = translatedTexts[i];
+
+      if (!translated && !paragraphTexts[i]) {
+        continue;
+      }
+
+      let tCount = 0;
+      const rebuilt = original.replace(/<a:t(?:(\s[^>]?)?)>([^<]*)<\/a:t>/g, (_full, attrs, _oldText) => {
+        tCount++;
+        if (tCount === 1) {
+          const safe = (translated || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+          const preserveAttr = safe.includes(' ') ? ' xml:space="preserve"' : '';
+          return `<a:t${preserveAttr}>${safe}</a:t>`;
+        }
+        return '<a:t></a:t>';
+      });
+
+      updatedXml = updatedXml.replace(original, rebuilt);
+    }
+
+    zip.updateFile(entry.entryName, Buffer.from(updatedXml, 'utf-8'));
+  }
+
+  send({ percent: 95, status: 'Repackaging PPTX file...' });
+  return zip.toBuffer();
+}
+
+async function handleImageFallback(
+  buffer: Buffer,
+  sourceLang: string,
+  targetLang: string,
+  baseUrl: string,
+  send: (data: object) => void,
+): Promise<Buffer> {
+  send({ percent: 30, status: 'Running fallback OCR on image...' });
+  const result = await Tesseract.recognize(buffer, 'eng');
+  const extractedText = result.data.text || '';
+
+  if (!extractedText.trim()) {
+    throw new Error('No text found in image.');
+  }
+
+  send({ percent: 50, status: 'Translating extracted text...' });
+  const lines = extractedText.split('\n');
+  const translated: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line) {
+      translated.push(await translateChunk(line, sourceLang, targetLang, baseUrl));
+    } else {
+      translated.push('');
+    }
+  }
+
+  return Buffer.from(translated.join('\n'), 'utf-8');
+}
+
 // ---------------------------------------------------------------------------
 // Route Handler
 // ---------------------------------------------------------------------------
@@ -272,6 +389,8 @@ export async function POST(request: Request) {
         const file = formData.get('file') as File | null;
         const sourceLang = (formData.get('sourceLang') as string) || 'auto';
         const targetLang = (formData.get('targetLang') as string) || 'en';
+        const ocrEngine = (formData.get('ocrEngine') as string) || 'tesseract';
+        const preserveLayout = (formData.get('preserveLayout') as string) || 'false';
 
         if (!file) {
           send({ error: 'No file uploaded.' });
@@ -298,7 +417,58 @@ export async function POST(request: Request) {
         let mimeType: string;
         let outputExt: string;
 
-        if (fileName.endsWith('.txt')) {
+        const isImage = fileName.endsWith('.png') || fileName.endsWith('.jpg') || fileName.endsWith('.jpeg');
+        const isPdf = fileName.endsWith('.pdf');
+
+        if ((isImage || isPdf) && preserveLayout === 'true') {
+          send({ percent: 15, status: 'Forwarding to layout-preserving translation service...' });
+          
+          const mlServiceUrl = process.env.ML_SERVICE_URL || 'http://localhost:8090';
+          const pythonFormData = new FormData();
+          pythonFormData.append('file', new Blob([buffer]), file.name);
+          pythonFormData.append('sourceLang', sourceLang);
+          pythonFormData.append('targetLang', targetLang);
+          pythonFormData.append('ocrEngine', ocrEngine);
+          pythonFormData.append('outputFormat', isImage ? 'image' : 'pdf');
+
+          try {
+            const mlRes = await fetch(`${mlServiceUrl}/translate-doc-layout`, {
+              method: 'POST',
+              body: pythonFormData,
+            });
+
+            if (!mlRes.ok) {
+              const errText = await mlRes.text();
+              throw new Error(`ML Service Error: ${errText || mlRes.statusText}`);
+            }
+
+            const mlData = await mlRes.json();
+            if (mlData.error) {
+              throw new Error(mlData.error);
+            }
+
+            if (!mlData.fileBuffer) {
+              throw new Error('ML Service did not return document buffer.');
+            }
+
+            resultBuffer = Buffer.from(mlData.fileBuffer, 'base64');
+            mimeType = isImage ? file.type : 'application/pdf';
+            outputExt = isImage ? fileName.split('.').pop()! : 'pdf';
+          } catch (err: any) {
+            console.error('ML service document translation failed, falling back to standard extraction...', err);
+            send({ percent: 20, status: 'Layout translation service failed. Falling back to plain text translation...' });
+            
+            if (isImage) {
+              resultBuffer = await handleImageFallback(buffer, sourceLang, targetLang, baseUrl, send);
+              mimeType = 'text/plain';
+              outputExt = 'txt';
+            } else {
+              resultBuffer = await handlePdf(buffer, sourceLang, targetLang, baseUrl, send);
+              mimeType = 'application/pdf';
+              outputExt = 'pdf';
+            }
+          }
+        } else if (fileName.endsWith('.txt')) {
           resultBuffer = await handleTxt(buffer, sourceLang, targetLang, baseUrl, send);
           mimeType = 'text/plain';
           outputExt = 'txt';
@@ -310,8 +480,16 @@ export async function POST(request: Request) {
           resultBuffer = await handlePdf(buffer, sourceLang, targetLang, baseUrl, send);
           mimeType = 'application/pdf';
           outputExt = 'pdf';
+        } else if (fileName.endsWith('.pptx')) {
+          resultBuffer = await handlePptx(buffer, sourceLang, targetLang, baseUrl, send);
+          mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+          outputExt = 'pptx';
+        } else if (isImage) {
+          resultBuffer = await handleImageFallback(buffer, sourceLang, targetLang, baseUrl, send);
+          mimeType = 'text/plain';
+          outputExt = 'txt';
         } else {
-          send({ error: 'Unsupported file type. Please upload a PDF, DOCX, or TXT file.' });
+          send({ error: 'Unsupported file type. Please upload a PDF, DOCX, PPTX, TXT, or Image file.' });
           controller.close();
           return;
         }

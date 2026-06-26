@@ -1,0 +1,69 @@
+# AuraTranslator ML Pipeline Configuration
+
+project:
+  name: auratranslator
+  base_model: facebook/nllb-200-distilled-600M
+
+datasets:
+  flores200:
+    name: facebook/flores
+    config: all
+    split: dev
+  wmt:
+    name: wmt19
+    config: hi-en
+  opus:
+    name: Helsinki-NLP/opus-100
+    subset: en-hi
+  ccmatrix:
+    name: yhavinga/ccmatrix
+    subset: en-hi
+  wikimatrix:
+    name: facebook/wiki_matrix
+    subset: en-hi
+  ai4bharat:
+    name: ai4bharat/IN22-Gen
+    split: train
+  europarl:
+    name: Helsinki-NLP/europarl
+    subset: en-hi
+  paracrawl:
+    name: Helsinki-NLP/opus_paracrawl
+    subset: en-hi
+  tedtalks:
+    name: IWSLT/ted_talks_iwslt
+    subset: en-hi
+
+domains:
+  - medical
+  - legal
+  - education
+  - finance
+  - technology
+  - government
+
+training:
+  max_steps: 5000
+  batch_size: 8
+  learning_rate: 2.0e-5
+  warmup_steps: 500
+  eval_steps: 500
+  save_steps: 1000
+  max_length: 512
+  fp16: true
+
+evaluation:
+  metrics:
+    - bleu
+    - chrf
+  comet_model: Unbabel/wmt22-comet-da
+
+deployment:
+  output_dir: ./output
+  gcs_bucket: auratranslator-models
+  vertex_region: us-central1
+
+retraining:
+  min_corrections: 100
+  schedule: "0 2 1 * *"  # Monthly 1st at 2 AM
+

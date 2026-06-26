@@ -1,0 +1,32 @@
+name: CI — ML Pipeline
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'ml-pipeline/**'
+  workflow_dispatch:
+
+jobs:
+  validate-pipeline:
+    name: Validate ML Pipeline Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml tqdm
+
+      - name: Validate config
+        run: python -c "import yaml; yaml.safe_load(open('ml-pipeline/config.yaml'))"
+
+      - name: Syntax check scripts
+        run: |
+          for f in ml-pipeline/scripts/*.py; do
+            python -m py_compile "$f"
+            echo "OK: $f"
+          done

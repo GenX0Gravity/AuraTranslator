@@ -45,7 +45,8 @@ export default function LanguageSelector({
     return (
       lang.name.toLowerCase().includes(query) ||
       lang.nativeName.toLowerCase().includes(query) ||
-      lang.code.toLowerCase().includes(query)
+      lang.code.toLowerCase().includes(query) ||
+      lang.family.toLowerCase().includes(query)
     );
   });
 
@@ -141,14 +142,19 @@ export default function LanguageSelector({
                     role="option"
                     aria-selected={isSelected}
                   >
-                    <span className="flex items-center gap-2 truncate">
+                    <span className="flex items-center gap-2 truncate max-w-[70%]">
                       <span className="text-xl shrink-0">{lang.flag}</span>
                       <span className="truncate">{lang.name}</span>
-                      <span className="text-xs text-slate-450 dark:text-slate-500 font-normal truncate">
+                      <span className="text-xs text-slate-400 dark:text-slate-500 font-normal truncate">
                         ({lang.nativeName})
                       </span>
                     </span>
-                    {isSelected && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] bg-slate-100 dark:bg-slate-850 text-slate-500 dark:text-slate-400 px-1.5 py-0.5 rounded truncate max-w-[100px]" title={lang.family}>
+                        {lang.family.split(' / ').pop()}
+                      </span>
+                      {isSelected && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />}
+                    </div>
                   </li>
                 );
               })

@@ -1,0 +1,14 @@
+transformers>=4.47.0
+torch>=2.5.0
+datasets>=3.2.0
+sentencepiece>=0.2.0
+sacremoses>=0.1.1
+sacrebleu>=2.4.0
+accelerate>=1.2.0
+pandas>=2.2.0
+pyyaml>=6.0.2
+google-cloud-storage>=2.19.0
+google-cloud-firestore>=2.19.0
+evaluate>=0.4.3
+nltk>=3.9.1
+tqdm>=4.67.0

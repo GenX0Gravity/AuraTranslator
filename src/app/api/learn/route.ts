@@ -35,6 +35,20 @@ export interface LearnResponse {
     memoryTip: string;
   };
   culturalNote: string;
+  translationExplanation: {
+    whyChosen: string;
+    alternatives: Array<{
+      word: string;
+      meaning: string;
+      usageContext: string;
+    }>;
+  };
+  quizzes: Array<{
+    question: string;
+    options: string[];
+    correctOptionIndex: number;
+    explanation: string;
+  }>;
   isMock: boolean;
 }
 
@@ -75,6 +89,27 @@ function buildMockResponse(word: string, sourceLang: string, targetLang: string)
       memoryTip: 'Configure GEMINI_API_KEY to get AI-generated memory tips.',
     },
     culturalNote: 'Cultural notes require AI. Please configure your API key in .env.local.',
+    translationExplanation: {
+      whyChosen: `The translation "${word}" was chosen because it represents the most direct and common equivalent of the source word in ${targetLang} for general conversation.`,
+      alternatives: [
+        { word: `${word} (option 1)`, meaning: 'Similar meaning with slightly different nuance', usageContext: 'Formal contexts' },
+        { word: `${word} (option 2)`, meaning: 'Colloquial variation', usageContext: 'Informal contexts' }
+      ]
+    },
+    quizzes: [
+      {
+        question: `Which of the following is the correct definition of "${word}"?`,
+        options: [`Matching translation in ${targetLang}`, 'An opposite concept', 'A grammatically incorrect variant', 'None of the above'],
+        correctOptionIndex: 0,
+        explanation: `In standard usage, "${word}" represents the correct translation provided.`
+      },
+      {
+        question: `How is "${word}" grammatically classified here?`,
+        options: ['Noun', 'Verb', 'Adjective', 'Pronoun'],
+        correctOptionIndex: 0,
+        explanation: `Based on the part of speech analysis, it is classified accordingly.`
+      }
+    ],
     isMock: true,
   };
 }
@@ -135,12 +170,50 @@ Respond with ONLY a valid JSON object (no markdown, no code fences) using this e
     ],
     "memoryTip": "a creative mnemonic or memory trick to remember this word"
   },
-  "culturalNote": "interesting cultural context, idiom origins, or usage nuances that a language learner should know"
+  "culturalNote": "interesting cultural context, idiom origins, or usage nuances that a language learner should know",
+  "translationExplanation": {
+    "whyChosen": "Detailed explanation of why this translation was chosen as the primary translation for the learner, explaining stylistic, semantic, or colloquial reasons.",
+    "alternatives": [
+      {
+        "word": "Alternative translation 1",
+        "meaning": "Meaning of this alternative translation",
+        "usageContext": "When to use this alternative instead (e.g., formal/slang/particular region)"
+      },
+      {
+        "word": "Alternative translation 2",
+        "meaning": "Meaning of this alternative translation",
+        "usageContext": "When to use this alternative instead"
+      }
+    ]
+  },
+  "quizzes": [
+    {
+      "question": "A multiple-choice question testing the user's understanding of this word, its meaning, grammar, or synonym in context.",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctOptionIndex": 0, // 0-indexed correct option
+      "explanation": "Detailed explanation of why the correct option is right and others are wrong."
+    },
+    {
+      "question": "Another multiple-choice question focusing on a different aspect (e.g. fill-in-the-blank example sentence or grammatical property).",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctOptionIndex": 1,
+      "explanation": "Grammatical or vocabulary explanation."
+    },
+    {
+      "question": "A third multiple-choice question testing spelling, pronunciation tips, or nuances.",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctOptionIndex": 2,
+      "explanation": "Explanation for the question."
+    }
+  ]
 }`;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+    }
   });
 
   const raw = response.text ?? '';
@@ -181,6 +254,11 @@ Respond with ONLY a valid JSON object (no markdown, no code fences) using this e
       memoryTip: parsed.vocabulary?.memoryTip ?? '',
     },
     culturalNote: parsed.culturalNote ?? '',
+    translationExplanation: {
+      whyChosen: parsed.translationExplanation?.whyChosen ?? '',
+      alternatives: Array.isArray(parsed.translationExplanation?.alternatives) ? parsed.translationExplanation.alternatives : [],
+    },
+    quizzes: Array.isArray(parsed.quizzes) ? parsed.quizzes.slice(0, 3) : [],
     isMock: false,
   };
 }

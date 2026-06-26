@@ -33,7 +33,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https://lh3.googleusercontent.com https://avatars.githubusercontent.com",
-      "connect-src 'self' https://translation.googleapis.com https://libretranslate.com https://*.firebaseio.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://generativelanguage.googleapis.com",
+      "connect-src 'self' https://translation.googleapis.com https://libretranslate.com https://*.firebaseio.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://generativelanguage.googleapis.com http://localhost:8090 https://*.run.app",
       "media-src 'self' blob:",
       "worker-src 'self' blob:",
       "frame-src 'none'",

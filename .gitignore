@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local data, models, and temp dirs
+/data/
+/models/
+/output/
+/scratch/

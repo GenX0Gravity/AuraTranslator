@@ -76,6 +76,7 @@ jobs:
             --set-env-vars="NODE_ENV=production" \
             --set-env-vars="NEXT_TELEMETRY_DISABLED=1" \
             --set-env-vars="NEXT_PUBLIC_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}" \
+            --set-env-vars="ML_SERVICE_URL=https://auratranslator-ml-$(gcloud config get-value project | tr ':' '-').${{ env.REGION }}.run.app" \
             --set-env-vars="NEXTAUTH_URL=https://${{ env.SERVICE_NAME }}-$(gcloud config get-value project | tr ':' '-').${{ env.REGION }}.run.app" \
             --service-account=auratranslator-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
 

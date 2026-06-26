@@ -27,7 +27,9 @@ import {
   User as UserIcon,
   LogOut,
   Layers,
-  Users
+  Users,
+  Tv,
+  Video
 } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
 import { LANGUAGES, getLanguageName } from '@/utils/languages';
@@ -35,8 +37,221 @@ import { useLocalStorage } from '@/hooks/useLocalStorage';
 import LanguageSelector from '@/components/LanguageSelector';
 import ThemeToggle from '@/components/ThemeToggle';
 import HistorySidebar, { HistoryItem } from '@/components/HistorySidebar';
+import DomainSelector from '@/components/DomainSelector';
+import ModelInfoBadge from '@/components/ModelInfoBadge';
+import TranslationFeedback from '@/components/TranslationFeedback';
+import OfflineModeToggle from '@/components/OfflineModeToggle';
 import { trackEvent } from '@/utils/analytics';
 import { get, set } from 'idb-keyval';
+import type { TranslationDomain, QualityScore } from '@/lib/translation/types';
+import { getOfflineTranslation, saveOfflineTranslation, isOfflineModeEnabled } from '@/lib/offline/browser-translator';
+
+interface Entity {
+  id: string;
+  name: string;
+  translatedName: string;
+  category: 'Person' | 'Place' | 'Organization' | 'Technical Term';
+  description: string;
+  preservationReason: string;
+}
+
+interface Relationship {
+  source: string;
+  target: string;
+  type: string;
+}
+
+function KnowledgeGraphView({ entities, relationships }: { entities: Entity[], relationships: Relationship[] }) {
+  const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
+
+  useEffect(() => {
+    if (entities.length > 0) {
+      setSelectedEntity(entities[0]);
+    } else {
+      setSelectedEntity(null);
+    }
+  }, [entities]);
+
+  if (entities.length === 0) return null;
+
+  const width = 480;
+  const height = 320;
+  const cx = width / 2;
+  const cy = height / 2;
+  const r = 95;
+
+  const nodeMap = new Map<string, { x: number; y: number; name: string; category: string }>();
+  entities.forEach((entity, idx) => {
+    const angle = (idx * 2 * Math.PI) / entities.length;
+    const x = cx + r * Math.cos(angle);
+    const y = cy + r * Math.sin(angle);
+    nodeMap.set(entity.id, { x, y, name: entity.translatedName || entity.name, category: entity.category });
+  });
+
+  const categoryColors: Record<string, string> = {
+    'Person': '#3b82f6', 
+    'Place': '#ef4444', 
+    'Organization': '#10b981', 
+    'Technical Term': '#f59e0b', 
+  };
+
+  const getEmoji = (cat: string) => {
+    switch (cat) {
+      case 'Person': return '👤';
+      case 'Place': return '📍';
+      case 'Organization': return '🏢';
+      case 'Technical Term': return '⚙️';
+      default: return '🔍';
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+      <div className="relative border border-slate-200/50 dark:border-slate-800 rounded-3xl overflow-hidden bg-slate-50/50 dark:bg-slate-900/30 p-2 shadow-inner">
+        <svg width="100%" height="320" viewBox={`0 0 ${width} ${height}`} className="mx-auto select-none">
+          {relationships.map((rel, idx) => {
+            const start = nodeMap.get(rel.source);
+            const end = nodeMap.get(rel.target);
+            if (!start || !end) return null;
+            
+            const midX = (start.x + end.x) / 2;
+            const midY = (start.y + end.y) / 2;
+
+            return (
+              <g key={idx}>
+                <line
+                  x1={start.x}
+                  y1={start.y}
+                  x2={end.x}
+                  y2={end.y}
+                  stroke="#cbd5e1"
+                  strokeWidth="1.5"
+                  className="stroke-slate-305 dark:stroke-slate-700"
+                  strokeDasharray="4 3"
+                />
+                <rect
+                  x={midX - 35}
+                  y={midY - 7}
+                  width="70"
+                  height="14"
+                  rx="4"
+                  className="fill-white dark:fill-slate-900 stroke-slate-200/60 dark:stroke-slate-800"
+                  strokeWidth="0.5"
+                />
+                <text
+                  x={midX}
+                  y={midY + 3}
+                  fontSize="7"
+                  fontWeight="bold"
+                  textAnchor="middle"
+                  className="fill-slate-400 dark:fill-slate-500"
+                >
+                  {rel.type}
+                </text>
+              </g>
+            );
+          })}
+
+          {entities.map((node) => {
+            const pos = nodeMap.get(node.id);
+            if (!pos) return null;
+            const color = categoryColors[node.category] || '#64748b';
+            const isSelected = selectedEntity?.id === node.id;
+
+            return (
+              <g
+                key={node.id}
+                className="cursor-pointer group"
+                onClick={() => setSelectedEntity(node)}
+              >
+                {isSelected && (
+                  <circle
+                    cx={pos.x}
+                    cy={pos.y}
+                    r="19"
+                    fill="none"
+                    stroke={color}
+                    strokeWidth="1.5"
+                    className="animate-ping opacity-25"
+                  />
+                )}
+                <circle
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={isSelected ? 14 : 11}
+                  fill={color}
+                  stroke={isSelected ? '#ffffff' : 'none'}
+                  strokeWidth="2.5"
+                  className="transition-all duration-300 group-hover:scale-115"
+                />
+                <text
+                  x={pos.x}
+                  y={pos.y + 3}
+                  fontSize="8"
+                  textAnchor="middle"
+                >
+                  {getEmoji(node.category)}
+                </text>
+                <text
+                  x={pos.x}
+                  y={pos.y + 22}
+                  fontSize="8.5"
+                  fontWeight="bold"
+                  textAnchor="middle"
+                  className={`${isSelected ? 'fill-blue-600 dark:fill-blue-400 font-extrabold' : 'fill-slate-700 dark:fill-slate-300'} transition-all`}
+                >
+                  {pos.name}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+
+        <div className="absolute bottom-2 left-2 flex gap-2 flex-wrap max-w-[90%] p-1.5 bg-white/90 dark:bg-slate-900/90 rounded-xl text-[8.5px] font-bold border border-slate-200/50 dark:border-slate-800/50 backdrop-blur">
+          <div className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-blue-500" /> Person</div>
+          <div className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-red-500" /> Place</div>
+          <div className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Org</div>
+          <div className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Tech Term</div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {selectedEntity ? (
+          <div className="glass-panel p-5 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-4 animate-in fade-in slide-in-from-right-2 duration-300">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{getEmoji(selectedEntity.category)}</span>
+                <div>
+                  <h4 className="text-sm font-extrabold text-slate-800 dark:text-slate-100">{selectedEntity.name}</h4>
+                  <p className="text-[10px] text-slate-405 uppercase tracking-widest font-bold">{selectedEntity.category}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2.5 py-1 rounded-xl text-xs font-bold border border-blue-500/20">
+                <span>{selectedEntity.translatedName}</span>
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-3 border-t border-slate-100 dark:border-slate-850">
+              <div>
+                <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Contextual Context</span>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mt-0.5">{selectedEntity.description}</p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/15 text-[11px] text-slate-700 dark:text-amber-400 leading-relaxed">
+                💡 <span className="font-bold">Proper Name Preservation Logic:</span> {selectedEntity.preservationReason}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl text-xs text-slate-400 italic">
+            Select any entity in the network graph on the left to inspect its semantics.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   const { data: session } = useSession();
@@ -94,8 +309,24 @@ export default function Home() {
   const [dismissedAlert, setDismissedAlert] = useLocalStorage<boolean>('dismissed-api-alert', false);
 
   // Quality Score State
-  const [qualityScore, setQualityScore] = useState<{score: number, feedback: string} | null>(null);
+  const [qualityScore, setQualityScore] = useState<QualityScore | null>(null);
   const [isScoring, setIsScoring] = useState(false);
+
+  // Document Translation Custom Options
+  const [ocrEngine, setOcrEngine] = useState<'tesseract' | 'paddleocr'>('tesseract');
+  const [preserveLayout, setPreserveLayout] = useState<boolean>(true);
+  const [exportFormat, setExportFormat] = useState<string>('pdf');
+
+  // Hybrid translation options
+  const [domain, setDomain] = useState<TranslationDomain | 'auto'>('auto');
+  const [tone, setTone] = useState<'formal' | 'casual' | 'neutral'>('neutral');
+  const [isSemantic, setIsSemantic] = useState(false);
+  const [semanticGraph, setSemanticGraph] = useState<{ entities: any[]; relationships: any[] } | null>(null);
+  const [translationModel, setTranslationModel] = useState<string | undefined>();
+  const [translationConfidence, setTranslationConfidence] = useState<number | undefined>();
+  const [translationLatency, setTranslationLatency] = useState<number | undefined>();
+  const [routingReason, setRoutingReason] = useState<string | undefined>();
+  const [detectedDomain, setDetectedDomain] = useState<string | undefined>();
 
   // Fetch history from DB if logged in
   useEffect(() => {
@@ -199,6 +430,11 @@ export default function Home() {
     setIsLoading(true);
     setError(null);
     setQualityScore(null);
+    setTranslationModel(undefined);
+    setTranslationConfidence(undefined);
+    setTranslationLatency(undefined);
+    setRoutingReason(undefined);
+    setDetectedDomain(undefined);
 
     try {
       let translatedResult = '';
@@ -206,6 +442,18 @@ export default function Home() {
       let mockModeResult = false;
       
       const cacheKey = `translation_${sLang}_${tLang}_${trimmed}`;
+
+      const offlineMode = await isOfflineModeEnabled();
+      if (offlineMode && !navigator.onLine) {
+        const offline = await getOfflineTranslation(sLang, tLang, trimmed);
+        if (offline) {
+          setTranslatedText(offline.translatedText);
+          setTranslationModel('browser-offline');
+          setTranslationConfidence(0.75);
+          setIsLoading(false);
+          return;
+        }
+      }
 
       try {
         const response = await fetch('/api/translate', {
@@ -217,6 +465,9 @@ export default function Home() {
             text: trimmed,
             sourceLang: sLang,
             targetLang: tLang,
+            domain,
+            tone,
+            semantic: isSemantic,
           }),
         });
 
@@ -228,9 +479,24 @@ export default function Home() {
         translatedResult = data.translatedText;
         mockModeResult = data.isMock;
         detectedResult = data.detectedSourceLanguage || null;
+        setTranslationModel(data.model);
+        setTranslationConfidence(data.confidence);
+        setTranslationLatency(data.latencyMs);
+        setRoutingReason(data.routingReason);
+        setDetectedDomain(data.detectedDomain);
+        
+        if (data.entities) {
+          setSemanticGraph({
+            entities: data.entities,
+            relationships: data.relationships || []
+          });
+        } else {
+          setSemanticGraph(null);
+        }
         
         // Save to offline cache
-        await set(cacheKey, { translatedText: translatedResult, detectedSourceLanguage: detectedResult, isMock: mockModeResult });
+        await set(cacheKey, { translatedText: translatedResult, detectedSourceLanguage: detectedResult, isMock: mockModeResult, model: data.model });
+        await saveOfflineTranslation(sLang, tLang, trimmed, translatedResult, { model: data.model, confidence: data.confidence });
       } catch (fetchErr: any) {
         // If offline or network error, fallback to IndexedDB cache
         const cached = await get(cacheKey);
@@ -321,7 +587,7 @@ export default function Home() {
     }, 850); // 850ms debounce
 
     return () => clearTimeout(timer);
-  }, [sourceText, sourceLang, targetLang]);
+  }, [sourceText, sourceLang, targetLang, domain, tone, isSemantic]);
 
   // Handle manual translation trigger
   const handleManualTranslate = () => {
@@ -545,6 +811,8 @@ export default function Home() {
     setError(null);
     setDetectedLang(null);
     setQualityScore(null);
+    setDetectedDomain(undefined);
+    setSemanticGraph(null);
   };
 
   const handleQualityScore = async () => {
@@ -559,6 +827,8 @@ export default function Home() {
           translatedText,
           sourceLang,
           targetLang,
+          domain,
+          tone,
         }),
       });
       if (!response.ok) throw new Error('Failed to get score');
@@ -607,10 +877,10 @@ export default function Home() {
   const validateAndSetFile = (file: File) => {
     const name = file.name.toLowerCase();
     const isImageOrPdf = name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.pdf');
-    const isDocument = name.endsWith('.docx') || name.endsWith('.txt');
+    const isDocument = name.endsWith('.docx') || name.endsWith('.txt') || name.endsWith('.pptx');
     
     if (!isImageOrPdf && !isDocument) {
-      setExtractionError('Unsupported file type. Please upload a PNG, JPG, JPEG, PDF, DOCX, or TXT file.');
+      setExtractionError('Unsupported file type. Please upload a PNG, JPG, JPEG, PDF, DOCX, PPTX, or TXT file.');
       setSelectedFile(null);
       return;
     }
@@ -623,6 +893,13 @@ export default function Home() {
 
     setSelectedFile(file);
     setExtractionError(null);
+
+    const ext = name.split('.').pop() || 'pdf';
+    if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
+      setExportFormat('pdf');
+    } else {
+      setExportFormat(ext);
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -713,10 +990,10 @@ export default function Home() {
   const handleTranslateDocument = async () => {
     if (!selectedFile) return;
     const name = selectedFile.name.toLowerCase();
-    const isDocFile = name.endsWith('.docx') || name.endsWith('.txt') || name.endsWith('.pdf');
+    const isDocFile = name.endsWith('.docx') || name.endsWith('.txt') || name.endsWith('.pdf') || name.endsWith('.pptx');
 
-    // Image/OCR files still go through extract flow
-    if (!isDocFile) {
+    // Image/OCR files still go through extract flow unless preserveLayout is true
+    if (!isDocFile && !preserveLayout) {
       handleExtractText();
       return;
     }
@@ -731,6 +1008,9 @@ export default function Home() {
       formData.append('file', selectedFile);
       formData.append('sourceLang', sourceLang);
       formData.append('targetLang', targetLang);
+      formData.append('ocrEngine', ocrEngine);
+      formData.append('preserveLayout', preserveLayout ? 'true' : 'false');
+      formData.append('exportFormat', exportFormat);
 
       const response = await fetch('/api/translate-doc', {
         method: 'POST',
@@ -830,7 +1110,7 @@ export default function Home() {
               AuraTranslate
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              AI-powered multilingual translator
+              Hybrid AI — Open-source models + continuous learning
             </p>
           </div>
         </div>
@@ -911,6 +1191,48 @@ export default function Home() {
             <span className="hidden md:inline">Workspaces</span>
           </Link>
 
+          {/* Subtitles Link */}
+          <Link
+            href="/subtitles"
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500/90 to-rose-500/90 text-white font-medium text-sm shadow-md shadow-pink-500/20 backdrop-blur-md hover:shadow-lg hover:shadow-pink-500/30 hover:from-pink-600/90 hover:to-rose-600/90 transition-all hover:scale-105 active:scale-95"
+            aria-label="Subtitles"
+          >
+            <Tv className="w-4 h-4" />
+            <span className="hidden md:inline">Subtitles</span>
+          </Link>
+
+          {/* Meeting Assistant Link */}
+          <Link
+            href="/meeting"
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600/90 to-teal-600/90 text-white font-medium text-sm shadow-md shadow-emerald-500/20 backdrop-blur-md hover:shadow-lg hover:shadow-emerald-500/30 hover:from-emerald-700/90 hover:to-teal-700/90 transition-all hover:scale-105 active:scale-95"
+            aria-label="Meeting Assistant"
+          >
+            <Video className="w-4 h-4" />
+            <span className="hidden md:inline">Meeting</span>
+          </Link>
+
+          {/* Multimodal Studio Link */}
+          <Link
+            href="/multimodal"
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600/90 to-indigo-650/90 text-white font-medium text-sm shadow-md shadow-indigo-500/20 backdrop-blur-md hover:shadow-lg hover:shadow-indigo-500/30 hover:from-purple-700/90 hover:to-indigo-700/90 transition-all hover:scale-105 active:scale-95"
+            aria-label="Multimodal Studio"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span className="hidden md:inline">Multimodal</span>
+          </Link>
+
+          {/* Profile Link */}
+          <Link
+            href="/profile"
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-white/70 dark:bg-slate-800/70 border border-slate-200/50 dark:border-slate-700/50 text-slate-700 dark:text-slate-300 font-medium text-sm shadow-sm backdrop-blur-md hover:bg-slate-50 dark:hover:bg-slate-800 transition-all cursor-pointer hover:scale-105 active:scale-95"
+            aria-label="Profile Settings"
+          >
+            <UserIcon className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+            <span className="hidden md:inline">Profile</span>
+          </Link>
+
+
+
           {/* Document Upload Trigger Button */}
           <button
             onClick={() => setIsUploadModalOpen(true)}
@@ -936,6 +1258,7 @@ export default function Home() {
             )}
           </button>
           
+          <OfflineModeToggle />
           <ThemeToggle />
         </div>
       </header>
@@ -947,7 +1270,7 @@ export default function Home() {
           <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/20 text-amber-800 dark:text-amber-300 flex items-start gap-3 backdrop-blur-md animate-in fade-in duration-300">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
             <div className="flex-1 text-xs md:text-sm">
-              <span className="font-bold">Mock Mode Active:</span> AuraTranslate is currently running offline. Configure `GOOGLE_TRANSLATE_API_KEY` or `LIBRETRANSLATE_API_KEY` in your `.env.local` to trigger live translations.
+              <span className="font-bold">Fallback Mode:</span> Start the ML service (`ML_SERVICE_URL`) or configure API keys. The hybrid router will prefer open-source models when available.
             </div>
             <button 
               onClick={() => setDismissedAlert(true)}
@@ -960,6 +1283,51 @@ export default function Home() {
         )}
 
         <div className="glass-panel rounded-3xl p-4 md:p-6 shadow-xl w-full flex flex-col gap-6">
+          {/* Domain & Tone Selection */}
+          <div className="space-y-3 border-b border-slate-200/50 dark:border-slate-800/50 pb-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">Translation Domain</p>
+              <DomainSelector selected={domain} onSelect={setDomain} />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-1.5 border-t border-dashed border-slate-200/30 dark:border-slate-800/30 mt-2">
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Tone:</p>
+                {(['neutral', 'formal', 'casual'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTone(t)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold capitalize transition-all ${
+                      tone === t
+                        ? 'bg-indigo-650 text-white'
+                        : 'bg-slate-100 dark:bg-slate-850 text-slate-555 hover:bg-slate-200 dark:hover:bg-slate-755'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              {/* Semantic Translation Toggle */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setIsSemantic(!isSemantic);
+                    if (isSemantic) setSemanticGraph(null);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border cursor-pointer ${
+                    isSemantic
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-transparent shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-850 border-slate-200/50 dark:border-slate-700/50 text-slate-555 hover:bg-slate-200 dark:hover:bg-slate-755'
+                  }`}
+                  title="Enable Semantic Mode to recognize proper nouns/technical terms and view the Knowledge Graph"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Semantic Mode: {isSemantic ? 'ON' : 'OFF'}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Controls Bar: Selectors & Swap Button */}
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 border-b border-slate-200/50 dark:border-slate-800/50 pb-6">
             <div className="flex-1 w-full flex flex-col md:flex-row md:items-end gap-3">
@@ -1290,14 +1658,21 @@ export default function Home() {
                 </div>
 
                 {/* Score Display / Indicators */}
-                <div className="flex items-center gap-2">
-                  {qualityScore && qualityScore.score !== null && (
+                <div className="flex flex-col items-end gap-2">
+                  <ModelInfoBadge
+                    model={translationModel}
+                    confidence={translationConfidence}
+                    latencyMs={translationLatency}
+                    routingReason={routingReason}
+                    detectedDomain={detectedDomain}
+                  />
+                  {qualityScore && qualityScore.confidenceScore !== undefined && (
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 cursor-help" title={qualityScore.feedback}>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-300">
                         Score
                       </span>
-                      <span className={`text-xs font-bold ${qualityScore.score >= 90 ? 'text-green-600 dark:text-green-400' : qualityScore.score >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
-                        {qualityScore.score}/100
+                      <span className={`text-xs font-bold ${qualityScore.confidenceScore >= 85 ? 'text-green-600 dark:text-green-400' : qualityScore.confidenceScore >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {qualityScore.confidenceScore}/100
                       </span>
                     </div>
                   )}
@@ -1310,6 +1685,203 @@ export default function Home() {
                   )}
                 </div>
               </div>
+
+              {/* Semantic Knowledge Graph Panel */}
+              {semanticGraph && (
+                <div className="mt-4 p-5 rounded-2xl bg-white/40 dark:bg-slate-800/40 border border-slate-200/40 dark:border-slate-700/40 space-y-5 animate-in slide-in-from-bottom-2 duration-300 backdrop-blur-md">
+                  <div className="flex items-center justify-between border-b border-slate-200/40 dark:border-slate-700/40 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-blue-500" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-805 dark:text-slate-100">Semantic Knowledge Graph</h3>
+                    </div>
+                    <button 
+                      onClick={() => setSemanticGraph(null)} 
+                      className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <KnowledgeGraphView
+                    entities={semanticGraph.entities}
+                    relationships={semanticGraph.relationships}
+                  />
+                </div>
+              )}
+
+              {/* Quality details panel */}
+              {qualityScore && (
+                <div className="mt-4 p-5 rounded-2xl bg-white/40 dark:bg-slate-800/40 border border-slate-200/40 dark:border-slate-700/40 space-y-5 animate-in slide-in-from-bottom-2 duration-300 backdrop-blur-md">
+                  <div className="flex items-center justify-between border-b border-slate-200/40 dark:border-slate-700/40 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-indigo-500" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-100">Translation Quality Estimation</h3>
+                    </div>
+                    <button 
+                      onClick={() => setQualityScore(null)} 
+                      className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Gauge indicator for Confidence */}
+                    <div className="flex flex-col items-center justify-center p-4 bg-white/60 dark:bg-slate-900/40 border border-slate-200/30 dark:border-slate-800/30 rounded-xl space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Overall Confidence</span>
+                      <div className="relative w-24 h-24 flex items-center justify-center">
+                        <svg className="w-full h-full transform -rotate-90">
+                          <circle
+                            cx="48"
+                            cy="48"
+                            r="38"
+                            className="text-slate-100 dark:text-slate-800"
+                            strokeWidth="8"
+                            stroke="currentColor"
+                            fill="transparent"
+                          />
+                          <circle
+                            cx="48"
+                            cy="48"
+                            r="38"
+                            strokeDasharray={2 * Math.PI * 38}
+                            strokeDashoffset={2 * Math.PI * 38 * (1 - qualityScore.confidenceScore / 100)}
+                            strokeWidth="8"
+                            strokeLinecap="round"
+                            className={`transition-all duration-1000 ${
+                              qualityScore.confidenceScore >= 85
+                                ? 'text-emerald-500'
+                                : qualityScore.confidenceScore >= 70
+                                  ? 'text-amber-500'
+                                  : 'text-red-500'
+                            }`}
+                            fill="transparent"
+                          />
+                        </svg>
+                        <div className="absolute flex flex-col items-center">
+                          <span className="text-xl font-bold text-slate-800 dark:text-slate-100">{qualityScore.confidenceScore}%</span>
+                          <span className="text-[8px] font-bold uppercase text-slate-400 dark:text-slate-500">
+                            {qualityScore.confidenceScore >= 85 ? 'High' : qualityScore.confidenceScore >= 70 ? 'Medium' : 'Low'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Progress bars for key linguistic dimensions */}
+                    <div className="md:col-span-2 space-y-3 p-4 bg-white/60 dark:bg-slate-900/40 border border-slate-200/30 dark:border-slate-800/30 rounded-xl">
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                          <span>Accuracy</span>
+                          <span>{qualityScore.accuracyScore}%</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-650 rounded-full transition-all duration-1000"
+                            style={{ width: `${qualityScore.accuracyScore}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                          <span>Fluency</span>
+                          <span>{qualityScore.fluencyScore}%</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-indigo-650 rounded-full transition-all duration-1000"
+                            style={{ width: `${qualityScore.fluencyScore}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                          <span>Grammar & Spelling</span>
+                          <span>{qualityScore.grammarScore}%</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-600 rounded-full transition-all duration-1000"
+                            style={{ width: `${qualityScore.grammarScore}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                          <span>Domain Vocabulary Matching</span>
+                          <span>{qualityScore.domainAccuracyScore}%</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-teal-600 rounded-full transition-all duration-1000"
+                            style={{ width: `${qualityScore.domainAccuracyScore}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* NLP Metrics Chips */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="p-2.5 rounded-xl bg-slate-100/50 dark:bg-slate-900/50 border border-slate-200/20 dark:border-slate-800/20 flex flex-col items-center" title="Estimated Bilingual Evaluation Understudy score (lexical overlap)">
+                      <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase">Estimated BLEU</span>
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-350">{qualityScore.bleuScore}</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-100/50 dark:bg-slate-900/50 border border-slate-200/20 dark:border-slate-800/20 flex flex-col items-center" title="Estimated Crosslingual Optimized Metric for Evaluation of Translation score">
+                      <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase">Estimated COMET</span>
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-355">{(qualityScore.cometScore / 100).toFixed(2)}</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-100/50 dark:bg-slate-900/50 border border-slate-200/20 dark:border-slate-800/20 flex flex-col items-center" title="Estimated BERTScore semantic contextual similarity">
+                      <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase">Estimated BERTScore</span>
+                      <span className="text-sm font-bold text-slate-700 dark:text-slate-356">{(qualityScore.bertScore / 100).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Feedback Comment */}
+                  <div className="p-3 bg-indigo-50/20 dark:bg-indigo-900/10 border border-indigo-200/30 dark:border-indigo-800/30 rounded-xl text-xs text-slate-650 dark:text-slate-300">
+                    <span className="font-bold text-indigo-650 dark:text-indigo-400">Evaluation: </span>
+                    {qualityScore.feedback}
+                  </div>
+
+                  {/* Alternative Translations */}
+                  {qualityScore.alternativeTranslations && qualityScore.alternativeTranslations.length > 0 && (
+                    <div className="space-y-2 border-t border-slate-200/30 dark:border-slate-800/30 pt-3.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">
+                        Alternative Translations {qualityScore.confidenceScore < 80 ? ' (Recommended due to lower confidence)' : ''}
+                      </span>
+                      <div className="space-y-1.5">
+                        {qualityScore.alternativeTranslations.map((alt, index) => (
+                          <button
+                            key={index}
+                            onClick={() => {
+                              setTranslatedText(alt);
+                              setTranslationConfidence(0.95);
+                            }}
+                            className="w-full text-left p-2.5 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-xs text-slate-650 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-850 hover:border-slate-400 dark:hover:border-slate-600 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer transition-all duration-200 flex justify-between items-center group"
+                          >
+                            <span className="flex-1 mr-2">{alt}</span>
+                            <span className="text-[9px] font-bold text-indigo-500 dark:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                              Use Alternative &rarr;
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <TranslationFeedback
+                sourceText={sourceText}
+                translatedText={translatedText}
+                sourceLang={sourceLang}
+                targetLang={targetLang}
+                model={translationModel}
+                domain={domain}
+                onCorrectionApplied={setTranslatedText}
+              />
             </div>
           </div>
           
@@ -1341,8 +1913,8 @@ export default function Home() {
         <p>© 2026 AuraTranslate. Designed with Google DeepMind.</p>
         <span className="hidden sm:inline">•</span>
         <div className="flex items-center gap-2">
-          <span>Powered by Google & LibreTranslate API</span>
-          <span className="px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-medium font-mono border border-slate-200/30 dark:border-slate-700/30">v1.4.0</span>
+          <span>NLLB · IndicTrans2 · MarianMT · M2M100 · OPUS-MT</span>
+          <span className="px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-[10px] font-medium font-mono border border-slate-200/30 dark:border-slate-700/30">v2.0.0</span>
         </div>
       </footer>
 
@@ -1387,7 +1959,7 @@ export default function Home() {
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileSelect}
-                  accept=".png,.jpg,.jpeg,.pdf,.docx,.txt"
+                  accept=".png,.jpg,.jpeg,.pdf,.docx,.txt,.pptx"
                   className="hidden"
                 />
                 <Upload className={`w-12 h-12 text-slate-350 dark:text-slate-600 stroke-[1.5] mb-4 transition-transform ${dragActive ? 'scale-110' : ''}`} />
@@ -1395,7 +1967,7 @@ export default function Home() {
                   Drag and drop your file here, or <span className="text-blue-500 hover:underline">browse</span>
                 </p>
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Supports PNG, JPG, PDF, DOCX, TXT (up to 10MB)
+                  Supports PNG, JPG, PDF, DOCX, PPTX, TXT (up to 10MB)
                 </p>
               </div>
             ) : (
@@ -1427,6 +1999,56 @@ export default function Home() {
                     <X className="w-4 h-4" />
                   </button>
                 </div>
+
+                {/* Document Translation Options */}
+                {selectedFile && !isExtracting && !isTranslatingDoc && (
+                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800/60 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block mb-1">
+                          OCR Engine
+                        </label>
+                        <select
+                          value={ocrEngine}
+                          onChange={(e) => setOcrEngine(e.target.value as 'tesseract' | 'paddleocr')}
+                          className="w-full px-2.5 py-1.5 rounded-xl bg-slate-55 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="tesseract">Tesseract (Fast / Wasm)</option>
+                          <option value="paddleocr">PaddleOCR (High Accuracy)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block mb-1">
+                          Export Format
+                        </label>
+                        <select
+                          value={exportFormat}
+                          onChange={(e) => setExportFormat(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-xl bg-slate-55 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="pdf">PDF Document</option>
+                          <option value="docx">Word (DOCX)</option>
+                          <option value="txt">Plain Text (TXT)</option>
+                          <option value="pptx">PowerPoint (PPTX)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="checkbox"
+                        id="preserve-layout-check"
+                        checked={preserveLayout}
+                        onChange={(e) => setPreserveLayout(e.target.checked)}
+                        className="rounded border-slate-200 dark:border-slate-800 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                      />
+                      <label htmlFor="preserve-layout-check" className="text-xs font-semibold text-slate-600 dark:text-slate-400 cursor-pointer">
+                        Preserve Original Layout & Placement
+                      </label>
+                    </div>
+                  </div>
+                )}
 
                 {/* Loading / Progress Indicator for image/OCR extraction */}
                 {isExtracting && (
@@ -1508,9 +2130,13 @@ export default function Home() {
                   <>
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>{
-                      selectedFile && (selectedFile.name.toLowerCase().endsWith('.docx') ||
+                      selectedFile && (
+                        selectedFile.name.toLowerCase().endsWith('.docx') ||
                         selectedFile.name.toLowerCase().endsWith('.txt') ||
-                        selectedFile.name.toLowerCase().endsWith('.pdf'))
+                        selectedFile.name.toLowerCase().endsWith('.pptx') ||
+                        selectedFile.name.toLowerCase().endsWith('.pdf') ||
+                        preserveLayout
+                      )
                         ? 'Translate Document'
                         : 'Extract & Translate'
                     }</span>
